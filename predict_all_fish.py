@@ -19,7 +19,7 @@ def predict_all_fish():
     split_fish_data(input_file='data3_historical_master.csv')  # 마스터 파일 지정
 
     # 🔥 [수정] 통합된 13종 전체 순회 리스트
-    fish_list = ['문어', '가자미', '넙치', '대게', '대구', '아귀', '골뱅이', '방어', '살오징어', '곰치_꼼치', '붉은대게', '청어', '화살꼴뚜기']
+    fish_list = ['문어', '가자미', '넙치', '대게', '대구', '아귀', '골뱅이', '방어', '살오징어', '붉은대게', '청어', '화살꼴뚜기']
     result_list = []
 
     for fish in fish_list:

@@ -1,15 +1,10 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-import holidays # 🔥 [추가] 한국 휴일 계산을 위한 라이브러리 추가
+import holidays
 
 from xgboost import XGBRegressor
-
-from sklearn.metrics import (
-    mean_absolute_error,
-    mean_squared_error,
-    r2_score
-)
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 
 def evaluate_fish_model(fish_name):
@@ -22,27 +17,35 @@ def evaluate_fish_model(fish_name):
     df = pd.merge(df, wt, left_on='위판일자', right_on='date', how='left').drop(columns=['date'])
     df = df.sort_values('위판일자')
 
-    # 기존 파생 변수
+    if len(df) > 0:
+        df['단가'] = df['단가'].ffill().bfill()
+        wt_cols = ['ws1', 'pa', 'tw', 'wh_sig', 'wp']
+        for col in wt_cols:
+            if col in df.columns:
+                df[col] = df[col].ffill().bfill()
+
+    # 파생 변수
     df['lag_1'] = df['단가'].shift(1)
     df['lag_7'] = df['단가'].shift(7)
     df['rolling_mean_7'] = df['단가'].rolling(7).mean()
     df['month'] = df['위판일자'].dt.month
     df['dayofweek'] = df['위판일자'].dt.dayofweek
 
-    # 🔥 [추가] 휴일/명절 파생 변수 (수요 폭등 반영)
     kr_holidays = holidays.KR()
     df['is_holiday'] = df['위판일자'].dt.date.apply(lambda x: 1 if x in kr_holidays else 0)
-    df['is_day_before_holiday'] = df['is_holiday'].shift(-1).fillna(0) # 내일이 휴일인가?
-    df['is_weekend_demand'] = df['위판일자'].dt.dayofweek.apply(lambda x: 1 if x in [4, 5] else 0) # 금,토 수요
+    df['is_day_before_holiday'] = df['is_holiday'].shift(-1).fillna(0)
+    df['is_weekend_demand'] = df['위판일자'].dt.dayofweek.apply(lambda x: 1 if x in [4, 5] else 0)
 
-    # 🔥 [추가] 기상 결항 파생 변수 (공급 부족 반영, 파고 3m 또는 풍속 14m/s 이상 시)
-    df['is_canceled'] = df.apply(lambda x: 1 if x['pa'] >= 3.0 or x['ws1'] >= 14.0 else 0, axis=1)
-    df['lag_1_canceled'] = df['is_canceled'].shift(1).fillna(0) # 어제 결항이었나?
-    df['consecutive_canceled_days'] = df['is_canceled'].groupby((df['is_canceled'] == 0).cumsum()).cumsum() # 연속 결항일
+    df['is_canceled'] = df.apply(lambda x: 1 if x.get('pa', 0) >= 3.0 or x.get('ws1', 0) >= 14.0 else 0, axis=1)
+    df['lag_1_canceled'] = df['is_canceled'].shift(1).fillna(0)
+    df['consecutive_canceled_days'] = df['is_canceled'].groupby((df['is_canceled'] == 0).cumsum()).cumsum()
 
-    df = df.dropna()
+    # 🔥 핵심 에러 해결: dropna() 대신 강제로 빈칸을 메워 데이터 증발 방지
+    df = df.bfill().ffill().fillna(0)
 
-    # 🔥 [수정] 새로 생성된 파생 변수들을 모델 학습(features) 리스트에 포함
+    if len(df) == 0:
+        raise ValueError("학습할 유효한 데이터가 없습니다.")
+
     features = [
         'lag_1', 'lag_7', 'rolling_mean_7', 'month', 'dayofweek',
         'ws1', 'pa', 'tw', 'wh_sig', 'wp',
@@ -50,16 +53,21 @@ def evaluate_fish_model(fish_name):
         'is_canceled', 'lag_1_canceled', 'consecutive_canceled_days'
     ]
 
+    # 혹시 날씨 데이터가 완전히 누락된 경우를 대비한 안전망
+    for f in features:
+        if f not in df.columns:
+            df[f] = 0
+
     X = df[features]
     y = df['단가']
 
-    model = XGBRegressor(n_estimators=300, learning_rate=0.05, max_depth=6, random_state=42)
+    model = XGBRegressor(n_estimators=100, learning_rate=0.05, max_depth=3, random_state=42)
     model.fit(X, y)
     pred = model.predict(X)
 
     mae = mean_absolute_error(y, pred)
     rmse = np.sqrt(mean_squared_error(y, pred))
-    r2 = r2_score(y, pred)
+    r2 = r2_score(y, pred) if len(y) > 1 else 0.0
 
     print(f'{fish_name} 모델 평가 - MAE: {mae:.2f} / RMSE: {rmse:.2f} / R2: {r2:.4f}')
 

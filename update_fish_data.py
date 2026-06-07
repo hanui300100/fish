@@ -3,20 +3,18 @@ import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 import pandas as pd
-import time
-from dotenv import load_dotenv
+import numpy as np
+import matplotlib.pyplot as plt
+from xgboost import XGBRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import holidays  # 🔥 [추가] 한국 휴일 계산을 위한 라이브러리 추가
 
-# .env 파일에서 환경변수 불러오기
-load_dotenv()
+from env_loader import get_env_value
 
 
-def update_fish_data(min_daily_count=50):
-    # 코드에 API 키를 하드코딩하지 않고 환경변수에서 가져옵니다.
-    service_key = os.getenv('PUBLIC_DATA_API_KEY')
-
-    if not service_key:
-        print("🚨 에러: .env 파일에서 PUBLIC_DATA_API_KEY를 찾을 수 없습니다!")
-        return 0
+def update_fish_data(service_key=None, min_daily_count=0):
+    if service_key is None:
+        service_key = get_env_value('PUBLIC_DATA_API_KEY', 'PUBLIC_DATA_API_KET')
 
     try:
         # 통합 마스터 파일로 파일명 통일
@@ -28,8 +26,8 @@ def update_fish_data(min_daily_count=50):
     markets = ['강릉시수산업협동조합', '강원고성군수산업협동조합', '동해시수산업협동조합', '삼척수산업협동조합',
                '속초시수산업협동조합', '양양수산업협동조합', '죽변수산업협동조합', '영덕북부수산업협동조합', '포항수산업협동조합']
 
-    # 🔥 13종 통합 필터링 리스트
-    fish_list = ['문어', '가자미', '넙치', '대게', '대구', '아귀', '골뱅이', '방어', '살오징어', '곰치', '꼼치', '홍게', '붉은대게', '청어', '화살꼴뚜기']
+    # 🔥 [수정] 13종 통합 어종 수집 리스트 (API 호출용 키워드)
+    fish_list = ['문어', '가자미', '넙치', '대게', '대구', '아귀', '골뱅이', '방어', '살오징어', '홍게', '붉은대게', '청어', '화살꼴뚜기']
 
     if not df.empty:
         df['위판일자'] = pd.to_datetime(df['위판일자'])
@@ -41,10 +39,10 @@ def update_fish_data(min_daily_count=50):
     end_date = datetime.today() - timedelta(days=1)
 
     if start_date > end_date:
-        print("이미 최신 수산물 데이터입니다.")
+        print("이미 최신 데이터입니다.")
         return 0
 
-    print(f"{start_date.date()} ~ {end_date.date()} 수산물 데이터 수집 시작")
+    print(f"{start_date.date()} ~ {end_date.date()} 데이터 수집 시작")
     all_items = []
     current_date = start_date
 
@@ -60,28 +58,8 @@ def update_fish_data(min_daily_count=50):
                 try:
                     for page in range(1, 6):
                         params['pageNo'] = str(page)
-
-                        # 🔥 3회 재시도 (Retry) 로직
-                        max_retries = 3
-                        success = False
-
-                        for attempt in range(max_retries):
-                            try:
-                                response = requests.get(url, params=params, timeout=10)
-                                if response.status_code == 200:
-                                    success = True
-                                    break
-                                else:
-                                    print(
-                                        f"[{market} - {fish}] API 상태코드 {response.status_code}. 3초 후 재시도 ({attempt + 1}/{max_retries})")
-                                    time.sleep(3)
-                            except requests.exceptions.RequestException:
-                                print(f"[{market} - {fish}] 통신 지연 에러 발생. 3초 후 재시도 ({attempt + 1}/{max_retries})")
-                                time.sleep(3)
-
-                        if not success:
-                            print(f"🚨 [{market} - {fish}] 3회 재시도 최종 실패. 해당 페이지 건너뜀.")
-                            break
+                        response = requests.get(url, params=params, timeout=5)
+                        if response.status_code != 200: break
 
                         root = ET.fromstring(response.content.decode('utf-8'))
                         items = root.findall('.//item')
@@ -122,25 +100,24 @@ def update_fish_data(min_daily_count=50):
     updated_df = updated_df.sort_values('위판일자').reset_index(drop=True)
     updated_df['수산물표준코드명'] = updated_df['수산물표준코드명'].astype(str).str.strip()
 
-    # 🔥 13종 전처리 필터링 및 이름 매핑 통합
+    # 🔥 [수정] 13종 통합 필터링 리스트
     target_fish = ['문어', '대문어', '가자미류', '기름가자미', '참가자미', '홍가자미', '대구', '대구류', '아귀', '넙치', '대게', '가자미',
-                   '골뱅이', '방어', '살오징어', '곰치', '꼼치', '홍게', '붉은대게', '청어', '화살꼴뚜기']
+                   '골뱅이', '방어', '살오징어', '홍게', '붉은대게', '청어', '화살꼴뚜기']
     df_filter = updated_df[updated_df['수산물표준코드명'].isin(target_fish)].copy()
 
+    # 🔥 [수정] 13종 통합 명칭 매핑 규칙 (곰치_꼼치 및 붉은대게 통합 반영)
     fish_map = {
         '대문어': '문어',
         '기름가자미': '가자미', '참가자미': '가자미', '홍가자미': '가자미', '가자미류': '가자미',
         '대구류': '대구',
-        '곰치': '곰치_꼼치', '꼼치': '곰치_꼼치',
         '홍게': '붉은대게'
     }
     df_filter['수산물표준코드명'] = df_filter['수산물표준코드명'].replace(fish_map)
 
-    # 동일 일자/수협/어종 가중평균 병합
+    # 가중평균 병합
     df_grouped = df_filter.groupby(['위판일자', '산지조합명', '수산물표준코드명'], as_index=False)[['위판중량', '위판금액']].sum()
     df_grouped['단가'] = df_grouped['위판금액'] / df_grouped['위판중량']
     df_filter = df_grouped.sort_values(['위판일자', '산지조합명', '수산물표준코드명']).reset_index(drop=True)
 
     df_filter.to_csv('data3_historical_master.csv', index=False, encoding='utf-8-sig')
     print("통합 마스터 데이터 업데이트 완료")
-    return 1

@@ -52,7 +52,6 @@ FISH_GROUPS = {
     '방어': ['방어'],
     '청어': ['청어'],
     '화살꼴뚜기': ['화살꼴뚜기'],
-    '곰치_꼼치': ['곰치', '꼼치'],
     '우렁쉥이': ['우렁쉥이', '멍게'],
     '해삼': ['해삼']
 }
@@ -278,7 +277,7 @@ if __name__ == "__main__":
     # 2. 딥러닝 분석 실행
     if not df_master_database.empty:
         # 분석을 원하는 어종 세팅
-        RUN_TARGETS = ['붉은대게_홍게', '골뱅이', '살오징어', '방어', '청어', '화살꼴뚜기', '곰치_꼼치', '우렁쉥이', '해삼']
+        RUN_TARGETS = ['붉은대게_홍게', '골뱅이', '살오징어', '방어', '청어', '화살꼴뚜기', '우렁쉥이', '해삼']
 
         for target_group in RUN_TARGETS:
             run_deep_learning_analysis(df_master_database, target_group)
